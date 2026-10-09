@@ -1,0 +1,8 @@
+import { useState } from 'react'
+import { hasBiometric, verifyBiometric, verifyPin } from '../../services/security'
+
+export function LockScreen({ onUnlock, onReset }: { onUnlock: () => void; onReset: () => void }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  return <main className="lock-screen"><div className="lock-card"><span className="lock-icon" aria-hidden="true">◈</span><p className="eyebrow">Finanzas personales</p><h1>App bloqueada</h1><p>Introduce tu PIN para acceder a tus finanzas.</p><form onSubmit={async event => {event.preventDefault();setBusy(true);setError('');const form=new FormData(event.currentTarget);try{if(await verifyPin(String(form.get('pin')||'')))onUnlock();else setError('PIN incorrecto. Inténtalo de nuevo.')}catch{setError('No se pudo verificar el PIN.')}finally{setBusy(false)}}}><label className="form-field"><span>PIN de 6 a 12 dígitos</span><input name="pin" type="password" inputMode="numeric" pattern="[0-9]{6,12}" minLength={6} maxLength={12} autoComplete="current-password" autoFocus required/></label><button className="primary-button" disabled={busy}>{busy?'Comprobando…':'Desbloquear'}</button></form>{hasBiometric()&&<button className="biometric-unlock" onClick={async()=>{setBusy(true);setError('');try{if(await verifyBiometric())onUnlock();else setError('No se pudo verificar la identidad.')}catch{setError('La autenticación del dispositivo se canceló o falló.')}finally{setBusy(false)}}} disabled={busy}>Autenticar con este dispositivo</button>}{error&&<p className="lock-error" role="alert">{error}</p>}<button className="text-button lock-reset" onClick={onReset}>He olvidado el PIN</button></div></main>
+}
