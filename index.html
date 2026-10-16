@@ -9,6 +9,18 @@
     <title>Finanzas</title>
   </head>
   <body>
+    <script>
+      (() => {
+        try {
+          const preference = localStorage.getItem('finanzas.theme') || 'system';
+          const dark = preference === 'dark' || (preference === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#10151b' : '#f6f7f8');
+        } catch {
+          document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -12,10 +12,12 @@ import { hasPin, removePin } from '../services/security'
 import { LockScreen } from '../features/security/LockScreen'
 import { database } from '../data/database'
 import { Onboarding } from '../features/onboarding/Onboarding'
+import { useThemePreference } from '../hooks/useThemePreference'
 
 type ActiveForm = 'expense' | 'income' | 'transfer' | 'recurring-expense' | 'recurring-income' | null
 
 export function App() {
+  const [themePreference, setThemePreference] = useThemePreference()
   const [isLocked, setIsLocked] = useState(() => hasPin())
   useNotificationScheduler(!isLocked)
   const [activeItem, setActiveItem] = useState<NavigationItem>('inicio')
@@ -96,7 +98,7 @@ export function App() {
                 ? <RecurringForm kind="income" onBack={() => setActiveForm(null)} onGoToAccounts={openAccountManagerFromForm} />
                 : activeItem === 'inicio'
                   ? <HomePage onNavigate={handleNavigate} />
-                : <FinancePage section={activeItem} onLockNow={() => setIsLocked(true)} openAccountsOnLoad={openAccountsOnSettings} onAccountsClose={accountsReturnForm?returnToFormAfterAccounts:undefined} onStartTransfer={startTransferFromAccounts} />}
+                : <FinancePage section={activeItem} onLockNow={() => setIsLocked(true)} openAccountsOnLoad={openAccountsOnSettings} onAccountsClose={accountsReturnForm?returnToFormAfterAccounts:undefined} onStartTransfer={startTransferFromAccounts} themePreference={themePreference} onThemePreferenceChange={setThemePreference} />}
     </AppShell>
   )
 }

@@ -6,8 +6,9 @@ import type { NavigationItem } from '../../app/navigation'
 import { useFinanceData } from '../../hooks/useFinanceData'
 import { database } from '../../data/database'
 import { monthKey, recurringDatesInMonth } from '../../utils/dates'
-import { moveMovementToTrash, saveMovement, skipRecurringOccurrence, updateMovement } from '../../services/finance'
-import type { Movement, RecurringItem } from '../../models/entities'
+import { attachDocumentsToMovement, moveMovementToTrash, saveMovement, skipRecurringOccurrence, updateMovement } from '../../services/finance'
+import { attachmentErrorMessage, validateAttachmentFiles } from '../../services/attachments'
+import type { DocumentRecord, Movement, RecurringItem } from '../../models/entities'
 
 type HomePageProps = { onNavigate: (item: NavigationItem) => void }
 
@@ -65,8 +66,10 @@ export function HomePage({ onNavigate }: HomePageProps) {
   const data = useFinanceData()
   const trashRecords = useLiveQuery(()=>database.trash.toArray(),[],[])
   const wasTrashed = (itemId:string,date:string) => trashRecords?.some(record=>record.movement.recurringItemId===itemId&&(record.movement.recurrenceDate||record.movement.date)===date)??false
-  const activeAccounts = new Set(data.accounts.filter(account=>account.active).map(account=>account.id))
-  const balance = data.accounts.filter(a=>a.active).reduce((s,a)=>s+a.balance,0)
+  const activeAccountList = data.accounts.filter(account=>account.active)
+  const activeAccounts = new Set(activeAccountList.map(account=>account.id))
+  const balance = activeAccountList.reduce((s,account)=>s+account.balance,0)
+  const accountSharesAvailable = balance > 0 && activeAccountList.every(account=>account.balance >= 0)
   const recurringExpenses = data.recurringItems.filter(r=>r.active&&r.kind==='expense'&&(!r.accountId||activeAccounts.has(r.accountId)))
   const now = new Date()
   const realMonth = new Date(now.getFullYear(), now.getMonth(), 1)
@@ -101,16 +104,25 @@ export function HomePage({ onNavigate }: HomePageProps) {
     <div className="page page-home">
       <PageHeader eyebrow="Tu espacio financiero" title={`${getGreeting()} 👋`} detail="Tus finanzas, claras y bajo tu control." />
 
-      <section className="balance-card" aria-label="Saldo total">
+      <section className="balance-card" aria-label="Saldo total y distribución por cuenta">
         <div className="balance-card-top">
           <span className="balance-label">Saldo total</span>
-          <span className="balance-mark" aria-hidden="true">€</span>
+          <span className="accounts-count">{activeAccountList.length} {activeAccountList.length===1?'cuenta':'cuentas'}</span>
         </div>
         <p className="balance-value">{money(balance)} <span>€</span></p>
-        <div className="balance-card-bottom">
-          <span className="balance-footnote">{data.accounts.length?'Saldo actual de tus cuentas':'Añade una cuenta en Ajustes para empezar'}</span>
-          <span className="accounts-count">{data.accounts.filter(a=>a.active).length} cuentas</span>
-        </div>
+        {activeAccountList.length ? <>
+          <div className="balance-divider" aria-hidden="true" />
+          <div className="balance-account-list" aria-label="Distribución del saldo total">
+            {activeAccountList.map(account=>{
+              const share=accountSharesAvailable?account.balance/balance*100:null
+              const shareLabel=share===null?'—':`${share.toLocaleString('es-ES',{minimumFractionDigits:1,maximumFractionDigits:1})} %`
+              return <div className="balance-account" key={account.id}>
+                <div className="balance-account-heading"><span className="balance-account-name">{account.name}</span><span className="balance-account-values"><span className="balance-account-share">{shareLabel}</span><span className="balance-account-amount">{money(account.balance)} €</span></span></div>
+                <div className="balance-account-track" role="img" aria-label={`${account.name}: ${share===null?'porcentaje no disponible':`${shareLabel} del saldo total`}`}><span style={{width:`${share===null?0:Math.max(0,Math.min(100,share))}%`}} /></div>
+              </div>
+            })}
+          </div>
+        </> : <p className="balance-footnote">Añade una cuenta en Ajustes para empezar</p>}
       </section>
 
       <section className="available-card" aria-label="Disponible real">
@@ -170,20 +182,32 @@ export function HomePage({ onNavigate }: HomePageProps) {
 
 function OccurrenceEditor({occurrence,month,onClose}:{occurrence:{kind:'expense'|'income';item?:RecurringItem;date:string;movement?:Movement};month:Date;onClose:()=>void}) {
   const {accounts}=useFinanceData()
-  const [status,setStatus]=useState<Movement['status']>(occurrence.movement?.status??'pending')
+  const existing=occurrence.movement
+  const [status,setStatus]=useState<Movement['status']>(existing?.status??'pending')
+  const [selectedFiles,setSelectedFiles]=useState<File[]>([])
+  const [attachmentError,setAttachmentError]=useState('')
+  const [saving,setSaving]=useState(false)
+  const existingDocuments=useLiveQuery(()=>existing?database.documents.where('movementId').equals(existing.id).toArray():Promise.resolve([] as DocumentRecord[]),[existing?.id],[] as DocumentRecord[])
   async function submit(event:React.FormEvent<HTMLFormElement>){
     event.preventDefault()
-    const form=event.currentTarget
-    const values=new FormData(form)
+    const values=new FormData(event.currentTarget)
     const amount=Number(values.get('amount'))
     const date=String(values.get('date'))
     const status=occurrence.kind==='expense'&&!occurrence.item?'paid':String(values.get('status')) as Movement['status']
     if(!amount||amount<=0||!date)return
-    if(occurrence.movement) await updateMovement(occurrence.movement.id,{amount,date,status})
-    else if(occurrence.item) await saveMovement({kind:occurrence.kind,concept:occurrence.item.concept,amount,categoryId:occurrence.item.categoryId,accountId:occurrence.item.accountId,date,recurringItemId:occurrence.item.id,recurrenceDate:occurrence.date,status,note:occurrence.item.note})
-    onClose()
+    setAttachmentError('')
+    setSaving(true)
+    try {
+      if(selectedFiles.length)validateAttachmentFiles(selectedFiles)
+      if(existing) {
+        await updateMovement(existing.id,{amount,date,status})
+        if(selectedFiles.length)await attachDocumentsToMovement(existing.id,selectedFiles)
+      } else if(occurrence.item) await saveMovement({kind:occurrence.kind,concept:occurrence.item.concept,amount,categoryId:occurrence.item.categoryId,accountId:occurrence.item.accountId,date,recurringItemId:occurrence.item.id,recurrenceDate:occurrence.date,status,note:occurrence.item.note},selectedFiles)
+      onClose()
+    } catch(error) {
+      setAttachmentError(attachmentErrorMessage(error))
+    } finally { setSaving(false) }
   }
-  const existing=occurrence.movement
   const recurringItem=occurrence.item
   const isRecurring=Boolean(recurringItem)
   const isIncome=occurrence.kind==='income'
@@ -207,5 +231,5 @@ function OccurrenceEditor({occurrence,month,onClose}:{occurrence:{kind:'expense'
     }else return
     onClose()
   }
-  return <div className="quick-add-overlay" role="presentation"><button className="quick-add-backdrop" type="button" aria-label="Cerrar" onClick={onClose}/><section className="quick-add-sheet occurrence-editor" role="dialog" aria-modal="true" aria-labelledby="occurrence-title"><div className="sheet-grabber" aria-hidden="true"/><header className="quick-add-header"><div><p className="eyebrow">{isRecurring?'Solo para este mes':'Movimiento'}</p><h2 id="occurrence-title">{title}</h2><p>{isRecurring?'El cambio no modifica los siguientes vencimientos.':isIncome?'Puedes modificar el importe, la fecha o el estado.':'Puedes modificar el importe y la fecha.'}</p></div><button className="sheet-close" type="button" aria-label="Cerrar" onClick={onClose}>×</button></header><form className="occurrence-form" onSubmit={submit}><label className="form-field"><span>Importe</span><span className="amount-input-wrap"><input name="amount" type="number" min="0.01" step="0.01" required defaultValue={existing?.amount??occurrence.item?.amount}/><span>€</span></span></label><label className="form-field"><span>Fecha exacta</span><input name="date" type="date" min={isRecurring?`${monthKeyValue}-01`:undefined} max={isRecurring?monthEnd:undefined} required defaultValue={existing?.date??occurrence.date}/></label>{(isIncome||isRecurring)&&<fieldset className="status-field"><legend>Estado</legend><div className="status-options"><label className={`status-option${status==='pending'?' is-selected':''}`}><input type="radio" name="status" value="pending" checked={status==='pending'} onChange={()=>setStatus('pending')}/><span className="status-dot"/>Pendiente</label><label className={`status-option${status===(isIncome?'received':'paid')?' is-selected':''}`}><input type="radio" name="status" value={isIncome?'received':'paid'} checked={status===(isIncome?'received':'paid')} onChange={()=>setStatus(isIncome?'received':'paid')}/><span className="status-dot"/>{isIncome?'Recibido':'Pagado'}</label></div></fieldset>}<button className="primary-button" type="submit" disabled={!existing&&(!occurrence.item?.accountId||!accounts.some(account=>account.id===occurrence.item?.accountId&&account.active))}>{existing?'Guardar cambios':'Guardar este vencimiento'}</button>{!existing&&occurrence.item&&!accounts.some(account=>account.id===occurrence.item?.accountId&&account.active)&&<p className="field-hint">Asigna una cuenta al movimiento recurrente antes de guardarlo.</p>}</form>{(occurrence.kind==='expense'&&recurringItem||isIncome&&(existing&&!recurringItem||recurringItem)||occurrence.kind==='expense'&&existing&&!recurringItem)&&<button className="occurrence-delete-button" type="button" onClick={deleteIncome}>{isIncome?(recurringItem?'Eliminar solo este mes':'Borrar ingreso'):(recurringItem?'Eliminar solo este mes':'Borrar gasto')}</button>}</section></div>
+  return <div className="quick-add-overlay" role="presentation"><button className="quick-add-backdrop" type="button" aria-label="Cerrar" onClick={onClose}/><section className="quick-add-sheet occurrence-editor" role="dialog" aria-modal="true" aria-labelledby="occurrence-title"><div className="sheet-grabber" aria-hidden="true"/><header className="quick-add-header"><div><p className="eyebrow">{isRecurring?'Solo para este mes':'Movimiento'}</p><h2 id="occurrence-title">{title}</h2><p>{isRecurring?'El cambio no modifica los siguientes vencimientos.':isIncome?'Puedes modificar el importe, la fecha o el estado.':'Puedes modificar el importe y la fecha.'}</p></div><button className="sheet-close" type="button" aria-label="Cerrar" onClick={onClose}>×</button></header><form className="occurrence-form" onSubmit={submit}><label className="form-field"><span>Importe</span><span className="amount-input-wrap"><input name="amount" type="number" min="0.01" step="0.01" required defaultValue={existing?.amount??occurrence.item?.amount}/><span>€</span></span></label><label className="form-field"><span>Fecha exacta</span><input name="date" type="date" min={isRecurring?`${monthKeyValue}-01`:undefined} max={isRecurring?monthEnd:undefined} required defaultValue={existing?.date??occurrence.date}/></label>{(isIncome||isRecurring)&&<fieldset className="status-field"><legend>Estado</legend><div className="status-options"><label className={`status-option${status==='pending'?' is-selected':''}`}><input type="radio" name="status" value="pending" checked={status==='pending'} onChange={()=>setStatus('pending')}/><span className="status-dot"/>Pendiente</label><label className={`status-option${status===(isIncome?'received':'paid')?' is-selected':''}`}><input type="radio" name="status" value={isIncome?'received':'paid'} checked={status===(isIncome?'received':'paid')} onChange={()=>setStatus(isIncome?'received':'paid')}/><span className="status-dot"/>{isIncome?'Recibido':'Pagado'}</label></div></fieldset>}{occurrence.kind==='expense'&&(Boolean(existing)||isRecurring)&&<>{existingDocuments?.length>0&&<div className="movement-editor-documents"><span>Documentos adjuntos</span>{existingDocuments.map(doc=><button type="button" key={doc.id} onClick={()=>{const url=URL.createObjectURL(doc.blob);window.open(url,'_blank','noopener');window.setTimeout(()=>URL.revokeObjectURL(url),60000)}}>{doc.name} <span aria-hidden="true">↗</span></button>)}</div>}<label className="attachment-button"><span aria-hidden="true">＋</span> Adjuntar PDF o foto<input type="file" accept="image/*,.pdf" multiple hidden onChange={event=>{const files=Array.from(event.currentTarget.files||[]);setSelectedFiles(files);try{validateAttachmentFiles(files);setAttachmentError('')}catch(error){setAttachmentError(attachmentErrorMessage(error))}}}/></label><p className="field-hint">Puedes añadir varios archivos. Máximo 5 MB por archivo; las fotos y los PDF se comprimen al guardar. En un gasto recurrente previsto se adjuntarán a este vencimiento.</p>{selectedFiles.length>0&&<p className="field-hint">{selectedFiles.map(file=>file.name).join(', ')}</p>}{attachmentError&&<p className="field-hint" role="alert">{attachmentError}</p>}</>}<button className="primary-button" type="submit" disabled={saving||(!existing&&(!occurrence.item?.accountId||!accounts.some(account=>account.id===occurrence.item?.accountId&&account.active)))}>{saving?(selectedFiles.some(file=>file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf'))?'Comprimiendo y guardando…':'Guardando…'):existing?'Guardar cambios':'Guardar este vencimiento'}</button>{!existing&&occurrence.item&&!accounts.some(account=>account.id===occurrence.item?.accountId&&account.active)&&<p className="field-hint">Asigna una cuenta al movimiento recurrente antes de guardarlo.</p>}</form>{(occurrence.kind==='expense'&&recurringItem||isIncome&&(existing&&!recurringItem||recurringItem)||occurrence.kind==='expense'&&existing&&!recurringItem)&&<button className="occurrence-delete-button" type="button" onClick={deleteIncome}>{isIncome?(recurringItem?'Eliminar solo este mes':'Borrar ingreso'):(recurringItem?'Eliminar solo este mes':'Borrar gasto')}</button>}</section></div>
 }

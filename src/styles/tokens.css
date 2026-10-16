@@ -6,4 +6,31 @@
   --muted: #87918d;
   --line: #e9edeb;
   --green: #176b58;
+  --type-display: clamp(30px, 7vw, 36px);
+  --type-heading: 18px;
+  --type-item: 14px;
+  --type-body: 13px;
+  --type-subtitle: 12px;
+  --type-caption: 11px;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #10151b;
+  --surface: #18212a;
+  --ink: #f2f5f7;
+  --muted: #a2afbb;
+  --line: #303b46;
+  --green: #49a88f;
+  --type-display: clamp(30px, 7vw, 36px);
+  --type-heading: 18px;
+  --type-item: 14px;
+  --type-body: 13px;
+  --type-subtitle: 12px;
+  --type-caption: 11px;
+  --surface-raised: #202b36;
+  --surface-subtle: #1b252d;
+  --danger: #ed8881;
+  --warning: #e6b464;
+  --focus: #63c3a7;
 }

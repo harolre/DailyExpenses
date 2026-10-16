@@ -1,5 +1,6 @@
 import { database } from '../data/database'
 import type { Account, Category, Movement, RecurringItem, TrashRecord } from '../models/entities'
+import { prepareAttachmentFiles } from './attachments'
 
 const expenseCategories = ['Vivienda', 'Alimentación', 'Transporte', 'Salud', 'Ocio', 'Compras', 'Servicios', 'Otros']
 const incomeCategories = ['Salario', 'Ingresos extra', 'Inversiones', 'Regalos', 'Otros ingresos']
@@ -53,11 +54,12 @@ export async function deleteUserCategory(id: string) {
     await database.categories.delete(id)
   })
 }
-export async function saveMovement(input: Omit<Movement, 'id' | 'createdAt'>, file?: File) {
+export async function saveMovement(input: Omit<Movement, 'id' | 'createdAt'>, files: File[] = []) {
+  const preparedFiles = await prepareAttachmentFiles(files)
   const id = uid()
   await database.transaction('rw', database.movements, database.accounts, database.documents, async () => {
     await database.movements.add({ ...input, id, createdAt: new Date().toISOString() })
-    if (file) await database.documents.add({ id: uid(), movementId: id, name: file.name, type: file.type, blob: file, createdAt: new Date().toISOString() })
+    for (const file of preparedFiles) await database.documents.add({ id: uid(), movementId: id, name: file.name, type: file.type, blob: file, createdAt: new Date().toISOString() })
     if (input.status !== 'pending') {
       const change = input.kind === 'expense' ? -input.amount : input.kind === 'income' ? input.amount : 0
       if (input.accountId && change) { const account = await database.accounts.get(input.accountId); if (account) await database.accounts.update(input.accountId, { balance: account.balance + change }) }
@@ -70,7 +72,14 @@ export async function saveMovement(input: Omit<Movement, 'id' | 'createdAt'>, fi
 }
 export async function attachDocumentsToMovement(movementId: string, files: File[]) {
   if (!files.length || !(await database.movements.get(movementId))) return
-  await database.documents.bulkAdd(files.map(file => ({ id: uid(), movementId, name: file.name, type: file.type, blob: file, createdAt: new Date().toISOString() })))
+  const preparedFiles = await prepareAttachmentFiles(files)
+  await database.documents.bulkAdd(preparedFiles.map(file => ({ id: uid(), movementId, name: file.name, type: file.type, blob: file, createdAt: new Date().toISOString() })))
+}
+
+export async function emptyTrash() {
+  const count = await database.trash.count()
+  await database.trash.clear()
+  return count
 }
 export async function saveRecurring(input: Omit<RecurringItem, 'id' | 'createdAt' | 'active'>) {
   await database.recurringItems.add({ ...input, anchorDay: Number(input.nextDate.slice(-2)), id: uid(), active: true, createdAt: new Date().toISOString() })
